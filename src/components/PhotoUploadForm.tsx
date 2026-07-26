@@ -6,6 +6,7 @@ import Image from "next/image";
 import { Ticket, TicketDivider } from "@/components/Ticket";
 import { NoFoodDialog } from "@/components/NoFoodDialog";
 import { useAutoEstimateCalories, type AutoEstimateItem } from "@/hooks/useAutoEstimateCalories";
+import { compressImageFile } from "@/lib/compressImage";
 
 type EditableItem = AutoEstimateItem;
 
@@ -28,6 +29,7 @@ export function PhotoUploadForm() {
 
   const [file, setFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [preparingFile, setPreparingFile] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -56,12 +58,20 @@ export function PhotoUploadForm() {
     setNoFoodDetected(false);
   }
 
-  function handleFileSelected(e: React.ChangeEvent<HTMLInputElement>) {
+  async function handleFileSelected(e: React.ChangeEvent<HTMLInputElement>) {
     const f = e.target.files?.[0];
     if (!f) return;
     resetResult();
-    setFile(f);
-    setPreviewUrl(URL.createObjectURL(f));
+    setPreparingFile(true);
+    try {
+      // Downscale/compress before storing — real camera photos are routinely 3-10MB,
+      // which exceeds Vercel's 4.5MB function request limit (see compressImage.ts).
+      const compressed = await compressImageFile(f);
+      setFile(compressed);
+      setPreviewUrl(URL.createObjectURL(compressed));
+    } finally {
+      setPreparingFile(false);
+    }
   }
 
   function handleReset() {
@@ -192,7 +202,14 @@ export function PhotoUploadForm() {
           onChange={handleFileSelected}
         />
 
-        {!previewUrl ? (
+        {preparingFile ? (
+          <div className="flex flex-col items-center gap-4 py-8 text-center">
+            <div className="grid h-14 w-14 place-items-center rounded-full bg-marigold/15 text-2xl animate-pulse">
+              🖼️
+            </div>
+            <p className="text-sm text-muted">Đang xử lý ảnh…</p>
+          </div>
+        ) : !previewUrl ? (
           <div className="flex flex-col items-center gap-4 py-8 text-center">
             <div className="grid h-14 w-14 place-items-center rounded-full bg-marigold/15 text-2xl">
               🍽️
@@ -201,7 +218,7 @@ export function PhotoUploadForm() {
               <p className="font-display text-base font-bold text-cream">
                 Chụp hoặc tải ảnh khẩu phần ăn
               </p>
-              <p className="mt-1 text-sm text-muted">JPG, PNG hoặc WEBP — tối đa 8MB</p>
+              <p className="mt-1 text-sm text-muted">JPG, PNG hoặc WEBP — ảnh sẽ được tự động tối ưu dung lượng</p>
             </div>
             <div className="flex flex-wrap justify-center gap-3">
               <button
