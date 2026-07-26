@@ -1,0 +1,131 @@
+@import "tailwindcss";
+
+:root {
+  --bg: #1e2420;
+  --bg-raised: #262d27;
+  --bg-raised-2: #2f372f;
+  --paper: #f4eedd;
+  --paper-2: #eae2c8;
+  --ink: #26221b;
+  --cream: #f7f3e7;
+  --muted: #9c9788;
+  --muted-ink: #7a7362;
+  --marigold: #e7a93d;
+  --marigold-ink: #4a2f0c;
+  --herb: #5f7a52;
+  --chili: #b23b2e;
+
+  --background: var(--bg);
+  --foreground: var(--cream);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-bg: var(--bg);
+  --color-bg-raised: var(--bg-raised);
+  --color-bg-raised-2: var(--bg-raised-2);
+  --color-paper: var(--paper);
+  --color-paper-2: var(--paper-2);
+  --color-ink: var(--ink);
+  --color-cream: var(--cream);
+  --color-muted: var(--muted);
+  --color-muted-ink: var(--muted-ink);
+  --color-marigold: var(--marigold);
+  --color-marigold-ink: var(--marigold-ink);
+  --color-herb: var(--herb);
+  --color-chili: var(--chili);
+  --font-display: var(--font-archivo);
+  --font-sans: var(--font-plex-sans);
+  --font-mono: var(--font-plex-mono);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-plex-sans), Arial, Helvetica, sans-serif;
+}
+
+/* ---------------------------------------------------------------------- */
+/* "Phiếu tính calo" — signature ticket/receipt card component            */
+/* ---------------------------------------------------------------------- */
+
+.ticket {
+  position: relative;
+  background: var(--paper);
+  color: var(--ink);
+  box-shadow: 0 20px 40px -20px rgba(0, 0, 0, 0.6), 0 2px 0 rgba(0, 0, 0, 0.04) inset;
+  padding-block: 1.75rem;
+}
+
+.ticket::before,
+.ticket::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 13px;
+  background-image: radial-gradient(circle at 6.5px 6.5px, var(--bg) 6px, transparent 6.5px);
+  background-size: 18px 13px;
+  background-position: -2px center;
+  background-repeat: repeat-x;
+}
+
+.ticket::before {
+  top: -1px;
+}
+
+.ticket::after {
+  bottom: -1px;
+  transform: scaleY(-1);
+}
+
+.ticket-tear {
+  border-top: 1px dashed var(--muted-ink);
+}
+
+.tilt-1 {
+  transform: rotate(-0.6deg);
+}
+
+.tilt-2 {
+  transform: rotate(0.5deg);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .ticket-enter {
+    transform-origin: top center;
+    animation: ticket-print 480ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  }
+
+  .row-enter {
+    animation: row-in 320ms ease-out both;
+  }
+}
+
+@keyframes ticket-print {
+  from {
+    opacity: 0;
+    transform: translateY(-18px) scaleY(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scaleY(1);
+  }
+}
+
+@keyframes row-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.bg-noise {
+  background-image: radial-gradient(circle at 1px 1px, rgba(247, 243, 231, 0.045) 1px, transparent 0);
+  background-size: 22px 22px;
+}
