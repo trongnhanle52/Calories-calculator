@@ -87,20 +87,43 @@ export function PhotoUploadForm() {
 
   async function handleAnalyze() {
     if (!file) return;
+    // A short id to correlate this attempt's browser console logs with the server-side
+    // logs for the same request (route.ts logs the same id if this header is present).
+    const reqId = typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID().slice(0, 8) : `${Date.now()}`;
+    const logTag = `[analyze:${reqId}]`;
+    const startedAt = performance.now();
+
     setAnalyzing(true);
     setError(null);
     setSavedMessage(null);
     setNoFoodDetected(false);
+
+    // Guards against the request hanging forever with zero feedback (e.g. a stalled network
+    // path, or the server getting stuck) — without this, "click Phân tích and nothing ever
+    // happens" would be invisible in both the UI and the logs. Set comfortably above the
+    // server's own Gemini timeout (55s, see analyzeFood.ts) plus save/auth overhead.
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 65_000);
+
+    console.log(`${logTag} start — file="${file.name}" type=${file.type} size=${file.size}B`);
     try {
       const formData = new FormData();
       formData.append("image", file);
-      const res = await fetch("/api/analyze", { method: "POST", body: formData });
+      const res = await fetch("/api/analyze", {
+        method: "POST",
+        body: formData,
+        headers: { "x-request-id": reqId },
+        signal: controller.signal,
+      });
+      console.log(`${logTag} response received in ${Math.round(performance.now() - startedAt)}ms — HTTP ${res.status}`);
       const data = await res.json();
       if (!res.ok) {
+        console.warn(`${logTag} server returned an error:`, data.error);
         setError(data.error ?? "Phân tích thất bại. Vui lòng thử lại.");
         return;
       }
       if (data.noFoodDetected) {
+        console.log(`${logTag} no food detected in photo`);
         setNoFoodDetected(true);
         setItems([]);
         setImageUrl(null);
@@ -108,6 +131,7 @@ export function PhotoUploadForm() {
         return;
       }
       const analyzedItems = data.items as { name: string; calories: number; quantity: string }[];
+      console.log(`${logTag} success — ${analyzedItems.length} item(s), isMock=${Boolean(data.isMock)}`);
       setItems(
         analyzedItems.map((it) => ({
           id: nextId(),
@@ -122,9 +146,17 @@ export function PhotoUploadForm() {
       );
       setImageUrl(data.imageUrl as string);
       setIsMock(Boolean(data.isMock));
-    } catch {
-      setError("Không thể kết nối máy chủ. Vui lòng thử lại.");
+    } catch (err) {
+      const elapsedMs = Math.round(performance.now() - startedAt);
+      if (err instanceof DOMException && err.name === "AbortError") {
+        console.error(`${logTag} client-side timeout — no response after ${elapsedMs}ms`);
+        setError("Quá thời gian chờ phản hồi từ máy chủ. Vui lòng thử lại.");
+      } else {
+        console.error(`${logTag} network/parse error after ${elapsedMs}ms:`, err);
+        setError("Không thể kết nối máy chủ. Vui lòng thử lại.");
+      }
     } finally {
+      clearTimeout(timeoutId);
       setAnalyzing(false);
     }
   }

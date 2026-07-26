@@ -26,6 +26,13 @@ const analysisResponseSchema = z.object({
   ),
 });
 
+// Bounds how long we'll wait on a single Gemini call before giving up and falling back to
+// the mock analyzer. Without this, a hung/slow network path to Gemini could leave the whole
+// request stuck until Vercel's `maxDuration` (300s) kills the function — which the user would
+// experience as the UI just spinning forever with zero feedback. Configurable in case Gemini
+// vision calls genuinely need longer under normal conditions.
+const GEMINI_TIMEOUT_MS = Number(process.env.GEMINI_TIMEOUT_MS) || 55_000;
+
 /**
  * Analyzes a meal photo and returns the detected food items with estimated calories.
  * Uses Google Gemini's vision-capable model when GEMINI_API_KEY is configured.
@@ -33,22 +40,35 @@ const analysisResponseSchema = z.object({
  * configured or the API call itself fails, so the app always stays usable. When Gemini runs
  * successfully but confirms the photo has no food in it, that's reported via `noFoodDetected`
  * instead of being treated as a failure.
+ *
+ * @param reqId optional request id (propagated from the API route) purely for log correlation.
  */
-export async function analyzeFoodImage(imageDataUrl: string): Promise<AnalyzeResult> {
+export async function analyzeFoodImage(imageDataUrl: string, reqId = "-"): Promise<AnalyzeResult> {
+  const tag = `[analyzeFoodImage:${reqId}]`;
   const apiKey = process.env.GEMINI_API_KEY?.trim();
 
   if (!apiKey) {
+    console.log(`${tag} no GEMINI_API_KEY configured -> using mock analyzer`);
     return { items: mockAnalyze(), isMock: true, noFoodDetected: false };
   }
 
+  const startedAt = Date.now();
   try {
-    const items = await analyzeWithGemini(imageDataUrl, apiKey);
+    console.log(`${tag} calling Gemini (imageDataUrl length=${imageDataUrl.length} chars)`);
+    const items = await analyzeWithGemini(imageDataUrl, apiKey, tag);
+    console.log(`${tag} Gemini responded in ${Date.now() - startedAt}ms, items=${items.length}`);
     if (!items.length) {
       return { items: [], isMock: false, noFoodDetected: true };
     }
     return { items, isMock: false, noFoodDetected: false };
   } catch (error) {
-    console.error("[analyzeFoodImage] Gemini analysis failed, falling back to demo data:", error);
+    const elapsed = Date.now() - startedAt;
+    const name = error instanceof Error ? error.name : typeof error;
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(
+      `${tag} Gemini analysis failed after ${elapsed}ms (${name}: ${message}) — falling back to demo data`,
+      error,
+    );
     return { items: mockAnalyze(), isMock: true, noFoodDetected: false };
   }
 }
@@ -62,11 +82,19 @@ function parseDataUrl(dataUrl: string): { mimeType: string; base64: string } {
   return { mimeType: match[1], base64: match[2] };
 }
 
-async function analyzeWithGemini(imageDataUrl: string, apiKey: string): Promise<AnalyzedFoodItem[]> {
-  const client = new GoogleGenAI({ apiKey });
+async function analyzeWithGemini(
+  imageDataUrl: string,
+  apiKey: string,
+  tag: string,
+): Promise<AnalyzedFoodItem[]> {
+  // `httpOptions.timeout` bounds the actual HTTP call to Gemini itself (in ms) — see
+  // GEMINI_TIMEOUT_MS above for why this matters.
+  const client = new GoogleGenAI({ apiKey, httpOptions: { timeout: GEMINI_TIMEOUT_MS } });
   const model = process.env.GEMINI_MODEL?.trim() || "gemini-flash-latest";
   const { mimeType, base64 } = parseDataUrl(imageDataUrl);
+  console.log(`${tag} model=${model} mimeType=${mimeType} base64Length=${base64.length} timeoutMs=${GEMINI_TIMEOUT_MS}`);
 
+  const requestStartedAt = Date.now();
   const interaction = await client.interactions.create({
     model,
     system_instruction:
@@ -98,13 +126,23 @@ async function analyzeWithGemini(imageDataUrl: string, apiKey: string): Promise<
   });
 
   const raw = interaction.output_text;
+  console.log(`${tag} raw HTTP call completed in ${Date.now() - requestStartedAt}ms, output_text length=${raw?.length ?? 0}`);
   if (!raw) {
     throw new Error("Gemini không trả về nội dung nào");
   }
 
-  const json = JSON.parse(raw);
+  let json: unknown;
+  try {
+    json = JSON.parse(raw);
+  } catch (parseError) {
+    // Log a preview (not the full payload — could be long) so malformed-JSON cases are
+    // diagnosable straight from the logs without needing to reproduce the exact request.
+    console.error(`${tag} Gemini output_text is not valid JSON. Preview: ${raw.slice(0, 300)}`);
+    throw parseError;
+  }
   const parsed = analysisResponseSchema.safeParse(json);
   if (!parsed.success) {
+    console.error(`${tag} Gemini JSON didn't match expected schema:`, parsed.error.message, "Raw preview:", raw.slice(0, 300));
     throw new Error(`Phản hồi của Gemini không đúng định dạng: ${parsed.error.message}`);
   }
 

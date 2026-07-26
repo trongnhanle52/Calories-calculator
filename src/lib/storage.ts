@@ -38,22 +38,35 @@ export async function saveMealImage(options: {
   extension: string;
   contentType: string;
   userId: string;
+  reqId?: string;
 }): Promise<SavedMealImage> {
-  const { buffer, extension, contentType, userId } = options;
+  const { buffer, extension, contentType, userId, reqId = "-" } = options;
+  const tag = `[storage:${reqId}]`;
   const filename = `${Date.now()}-${randomUUID()}.${extension}`;
 
   if (isBlobConfigured()) {
-    const blob = await put(`meal-photos/${userId}/${filename}`, buffer, {
-      access: "public",
-      contentType,
-    });
-    return { url: blob.url, remove: () => deleteMealImage(blob.url) };
+    const authMode = process.env.BLOB_READ_WRITE_TOKEN ? "read-write-token" : "oidc";
+    console.log(`${tag} uploading to Vercel Blob (auth=${authMode}, bytes=${buffer.length})`);
+    const startedAt = Date.now();
+    try {
+      const blob = await put(`meal-photos/${userId}/${filename}`, buffer, {
+        access: "public",
+        contentType,
+      });
+      console.log(`${tag} Vercel Blob upload OK in ${Date.now() - startedAt}ms -> ${blob.url}`);
+      return { url: blob.url, remove: () => deleteMealImage(blob.url) };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`${tag} Vercel Blob upload FAILED after ${Date.now() - startedAt}ms: ${message}`, error);
+      throw error;
+    }
   }
 
   if (isRunningOnVercel()) {
     // The local-disk fallback below would fail anyway (Vercel's deployment filesystem is
     // read-only outside /tmp, so `public/uploads` can't be created) — but with a confusing
     // raw ENOENT error. Fail fast with a message that points straight at the real fix.
+    console.error(`${tag} running on Vercel but no Blob credentials found (BLOB_STORE_ID/BLOB_READ_WRITE_TOKEN both unset)`);
     throw new Error(
       "Vercel Blob chưa được cấu hình: thiếu cả BLOB_STORE_ID lẫn BLOB_READ_WRITE_TOKEN. " +
         "Vào Vercel Dashboard → Storage → tạo hoặc kết nối Blob store cho project này (đảm bảo áp dụng " +
@@ -61,6 +74,7 @@ export async function saveMealImage(options: {
     );
   }
 
+  console.log(`${tag} saving to local disk (public/uploads/${userId}/${filename})`);
   const userDir = path.join(process.cwd(), "public", "uploads", userId);
   await mkdir(userDir, { recursive: true });
   const absolutePath = path.join(userDir, filename);
