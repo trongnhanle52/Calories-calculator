@@ -6,8 +6,13 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  // Used only for migrations (needs a session/direct connection, not a
+  // transaction-mode pooler — e.g. Supabase's "Transaction pooler" port 6543
+  // doesn't support the advisory locks `prisma migrate` relies on). Falls
+  // back to DATABASE_URL when a separate direct URL isn't provided.
+  directUrl = env("DIRECT_URL")
 }
 
 model User {

@@ -44,7 +44,8 @@ cp .env.example .env
 
 | Biến | Bắt buộc? | Mô tả |
 | --- | --- | --- |
-| `DATABASE_URL` | Có | Connection string PostgreSQL. Dev cục bộ: lấy từ lệnh `npx prisma dev` (xem bên dưới). Production: connection string Postgres thật (Neon, Supabase, Vercel Postgres...). **Luôn thêm `&pgbouncer=true`** vào cuối URL — cần thiết khi dùng connection pooling (phổ biến ở các nhà cung cấp serverless), và vẫn an toàn khi dùng kết nối trực tiếp. |
+| `DATABASE_URL` | Có | Connection string PostgreSQL dùng lúc app chạy (runtime queries). Dev cục bộ: lấy từ lệnh `npx prisma dev` (xem bên dưới). Production: connection string Postgres thật (Neon, Supabase, Vercel Postgres...). **Luôn thêm `&pgbouncer=true`** vào cuối URL — cần thiết khi dùng connection pooling (phổ biến ở các nhà cung cấp serverless), và vẫn an toàn khi dùng kết nối trực tiếp. |
+| `DIRECT_URL` | Có | Connection string dùng riêng khi chạy `prisma migrate deploy`. **Bắt buộc phải là kết nối session/direct, không phải transaction-pooler** — lệnh migrate cần advisory lock mà pooler dạng transaction (vd. Supabase "Transaction pooler" cổng 6543) không hỗ trợ, sẽ bị treo vô thời hạn. Supabase: dùng "Session pooler" (cùng host, cổng 5432). Neon: dùng endpoint không có `-pooler` trong hostname. Nếu DB không phân biệt pooled/direct (vd. Postgres cục bộ) thì đặt giống hệt `DATABASE_URL`. |
 | `BLOB_READ_WRITE_TOKEN` | Không | Token Vercel Blob để lưu ảnh khi deploy serverless. Để trống thì lưu ảnh vào `public/uploads` (chỉ phù hợp khi tự host, có ổ đĩa bền vững) |
 | `AUTH_SECRET` | Có | Khóa bí mật ký JWT phiên đăng nhập. Tạo bằng: `node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"` |
 | `GEMINI_API_KEY` | Không | API key Google Gemini để bật nhận diện AI thật. **Để trống thì app tự chạy ở chế độ demo** với dữ liệu món ăn mẫu (xem bên dưới). |
@@ -62,13 +63,15 @@ Dự án dùng PostgreSQL. Cho môi trường dev cục bộ, cách nhanh nhất
 npx prisma dev --db-port 51214 --name default --detach   # khởi động server Postgres cục bộ (chạy nền), in ra DATABASE_URL
 ```
 
-Dán connection string vừa in ra vào `DATABASE_URL` trong `.env` (nhớ thêm `&pgbouncer=true` — xem lưu ý bên dưới), rồi tạo bảng:
+Dán connection string vừa in ra vào cả `DATABASE_URL` và `DIRECT_URL` trong `.env` (nhớ thêm `&pgbouncer=true` vào `DATABASE_URL` — xem lưu ý bên dưới), rồi tạo bảng:
 
 ```bash
 npx prisma migrate deploy   # tạo toàn bộ bảng (User, Meal, FoodItem)
 ```
 
-**Lưu ý quan trọng**: luôn thêm `&pgbouncer=true` vào cuối `DATABASE_URL` — nếu thiếu, một số request (vd. đăng ký/đăng nhập) có thể lỗi 500 với thông báo `prepared statement "s0" already exists`.
+**Lưu ý quan trọng**:
+- Luôn thêm `&pgbouncer=true` vào cuối `DATABASE_URL` — nếu thiếu, một số request (vd. đăng ký/đăng nhập) có thể lỗi 500 với thông báo `prepared statement "s0" already exists`.
+- Khi dùng Postgres có pooler riêng biệt (Supabase, Neon...), **`prisma migrate deploy` phải chạy qua `DIRECT_URL` trỏ tới kết nối session/direct**, không phải transaction-pooler — nếu không lệnh migrate sẽ treo vô thời hạn (do cần advisory lock mà transaction-pooler không hỗ trợ).
 
 Server `prisma dev` chạy nền độc lập với terminal (do có `--detach`) nhưng **không tự khởi động lại sau khi reboot máy** — nếu tắt máy/mất điện, chạy lại bằng:
 
@@ -158,7 +161,8 @@ App đã sẵn sàng deploy lên [Vercel](https://vercel.com) (PostgreSQL + Verc
 1. **Đẩy code lên GitHub/GitLab/Bitbucket** rồi vào [vercel.com/new](https://vercel.com/new) import repo.
 2. **Tạo database PostgreSQL**: dùng [Neon](https://neon.tech) hoặc [Supabase](https://supabase.com) (đều có free tier) — hoặc chọn **Storage → Create Database → Postgres (Neon)** ngay trong project Vercel. Copy connection string.
 3. **Set biến môi trường** trong Vercel project (Settings → Environment Variables):
-   - `DATABASE_URL` — connection string ở bước 2. **Nhớ thêm `&pgbouncer=true`** vào cuối nếu đó là connection string dạng pooled (Neon pooled endpoint có `-pooler` trong hostname, Supabase "Transaction pooler" dùng cổng 6543) — nếu thiếu có thể gặp lỗi 500 `prepared statement already exists` khi có nhiều request đồng thời.
+   - `DATABASE_URL` — connection string dùng lúc app chạy. **Nhớ thêm `&pgbouncer=true`** vào cuối nếu đó là connection string dạng pooled (Neon pooled endpoint có `-pooler` trong hostname, Supabase "Transaction pooler" dùng cổng 6543) — nếu thiếu có thể gặp lỗi 500 `prepared statement already exists` khi có nhiều request đồng thời.
+   - `DIRECT_URL` — connection string dùng riêng khi build chạy `prisma migrate deploy`. **Phải là kết nối session/direct, không phải transaction-pooler** (Supabase: đổi cổng 6543 → 5432, tức "Session pooler", giữ nguyên host/user/password; Neon: dùng endpoint không có `-pooler` trong hostname) — nếu dùng nhầm connection string transaction-pooler thì lệnh migrate sẽ treo vô thời hạn khi build, deploy sẽ fail do timeout.
    - `AUTH_SECRET` — tạo bằng `node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"`.
    - `GEMINI_API_KEY` — API key thật (để trống thì app chạy demo mode).
    - Tuỳ chọn: `GEMINI_MODEL`, `ANALYZE_RATE_LIMIT_*`, `ESTIMATE_RATE_LIMIT_*` (xem bảng biến môi trường ở trên).
