@@ -5,15 +5,21 @@ import { del, put } from "@vercel/blob";
 
 /**
  * Where meal photos get stored:
- * - Any environment with `BLOB_READ_WRITE_TOKEN` set (e.g. Vercel with a Blob store
- *   connected): uploads go to Vercel Blob. This is required in production because
- *   serverless functions have no persistent writable disk — a file saved during one
- *   request isn't guaranteed to still be there for a later request/instance.
- * - Local dev (no token configured): falls back to `public/uploads/<userId>/<file>`,
- *   served directly by Next.js's static file handling — zero setup needed to develop.
+ * - Any environment with a Vercel Blob store connected: uploads go to Vercel Blob. This
+ *   is required in production because serverless functions have no persistent writable
+ *   disk — a file saved during one request isn't guaranteed to still be there for a
+ *   later request/instance.
+ *   Connecting a store via the Vercel dashboard exposes credentials one of two ways —
+ *   both are handled transparently by `put()`/`del()` from `@vercel/blob`, we just need
+ *   to detect that *some* form of it is present:
+ *     - Modern default: OIDC-based, short-lived tokens — `BLOB_STORE_ID` (+ the
+ *       auto-rotated `VERCEL_OIDC_TOKEN`, which the SDK reads and refreshes itself).
+ *     - Fallback/older style: a long-lived static `BLOB_READ_WRITE_TOKEN`.
+ * - Local dev (neither set): falls back to `public/uploads/<userId>/<file>`, served
+ *   directly by Next.js's static file handling — zero setup needed to develop.
  */
 function isBlobConfigured() {
-  return Boolean(process.env.BLOB_READ_WRITE_TOKEN);
+  return Boolean(process.env.BLOB_READ_WRITE_TOKEN || process.env.BLOB_STORE_ID);
 }
 
 /** Vercel sets this automatically on every deployment (Production, Preview, and dev via `vercel dev`). */
@@ -49,7 +55,7 @@ export async function saveMealImage(options: {
     // read-only outside /tmp, so `public/uploads` can't be created) — but with a confusing
     // raw ENOENT error. Fail fast with a message that points straight at the real fix.
     throw new Error(
-      "Vercel Blob chưa được cấu hình: thiếu biến môi trường BLOB_READ_WRITE_TOKEN. " +
+      "Vercel Blob chưa được cấu hình: thiếu cả BLOB_STORE_ID lẫn BLOB_READ_WRITE_TOKEN. " +
         "Vào Vercel Dashboard → Storage → tạo hoặc kết nối Blob store cho project này (đảm bảo áp dụng " +
         "cho môi trường Production), rồi redeploy lại.",
     );
