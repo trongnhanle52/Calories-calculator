@@ -16,6 +16,11 @@ function isBlobConfigured() {
   return Boolean(process.env.BLOB_READ_WRITE_TOKEN);
 }
 
+/** Vercel sets this automatically on every deployment (Production, Preview, and dev via `vercel dev`). */
+function isRunningOnVercel() {
+  return Boolean(process.env.VERCEL);
+}
+
 export interface SavedMealImage {
   url: string;
   /** Best-effort delete, e.g. when a photo turns out to have no food in it after all. */
@@ -37,6 +42,17 @@ export async function saveMealImage(options: {
       contentType,
     });
     return { url: blob.url, remove: () => deleteMealImage(blob.url) };
+  }
+
+  if (isRunningOnVercel()) {
+    // The local-disk fallback below would fail anyway (Vercel's deployment filesystem is
+    // read-only outside /tmp, so `public/uploads` can't be created) — but with a confusing
+    // raw ENOENT error. Fail fast with a message that points straight at the real fix.
+    throw new Error(
+      "Vercel Blob chưa được cấu hình: thiếu biến môi trường BLOB_READ_WRITE_TOKEN. " +
+        "Vào Vercel Dashboard → Storage → tạo hoặc kết nối Blob store cho project này (đảm bảo áp dụng " +
+        "cho môi trường Production), rồi redeploy lại.",
+    );
   }
 
   const userDir = path.join(process.cwd(), "public", "uploads", userId);
