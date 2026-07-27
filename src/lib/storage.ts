@@ -58,6 +58,17 @@ export async function saveMealImage(options: {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.error(`${tag} Vercel Blob upload FAILED after ${Date.now() - startedAt}ms: ${message}`, error);
+      if (/private access|private store/i.test(message)) {
+        // The connected store was created with "Private" access mode, which can't be
+        // changed after creation — a new store must be created with "Public" access
+        // (appropriate here since filenames are unguessable random UUIDs and nothing
+        // sensitive is stored).
+        throw new Error(
+          "Vercel Blob store hiện tại được tạo ở chế độ Private (không thể đổi sau khi tạo). " +
+            "Vào Vercel Dashboard → Storage → tạo Blob store MỚI, chọn access = Public → " +
+            "Connect store đó cho project này (thay cho store Private cũ) → redeploy lại.",
+        );
+      }
       throw error;
     }
   }
