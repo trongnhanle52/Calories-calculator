@@ -9,17 +9,17 @@ import { del, put } from "@vercel/blob";
  *   is required in production because serverless functions have no persistent writable
  *   disk — a file saved during one request isn't guaranteed to still be there for a
  *   later request/instance.
- *   Connecting a store via the Vercel dashboard exposes credentials one of a few ways —
- *   all handled transparently by `put()`/`del()` from `@vercel/blob`, we just need to
- *   detect that *some* form of it is present:
- *     - Modern default: OIDC-based, short-lived tokens — `BLOB_STORE_ID` (+ the
- *       auto-rotated `VERCEL_OIDC_TOKEN`, which the SDK reads and refreshes itself).
- *     - Fallback/older style: a long-lived static token, normally named
- *       `BLOB_READ_WRITE_TOKEN` — BUT if a project already has one store connected under
- *       that default name, connecting a *second* store forces Vercel to use a different
- *       prefix instead (e.g. `NEWSTORENAME_READ_WRITE_TOKEN`), so the exact env var name
- *       isn't guaranteed. See `resolveBlobToken()` below.
- * - Local dev (neither set): falls back to `public/uploads/<userId>/<file>`, served
+ *   Connecting a store via the Vercel dashboard exposes credentials one of a few ways,
+ *   all resolved explicitly below (see `resolveBlobAuthOptions()`) rather than left to the
+ *   SDK's own env lookup, which only recognizes the exact default names:
+ *     - A long-lived static read-write token, normally named `BLOB_READ_WRITE_TOKEN`.
+ *     - Modern/OIDC default: `BLOB_STORE_ID` + Vercel's auto-rotated `VERCEL_OIDC_TOKEN`
+ *       (read internally by the SDK — we never see it directly).
+ *     - Gotcha confirmed in production: once a project already has one store connected
+ *       under the default name, connecting a *second* store makes Vercel provision its
+ *       credentials under a custom prefix instead (e.g. `NEWSTORENAME_READ_WRITE_TOKEN` /
+ *       `NEWSTORENAME_STORE_ID`), so the exact env var name isn't guaranteed.
+ * - Local dev (nothing set): falls back to `public/uploads/<userId>/<file>`, served
  *   directly by Next.js's static file handling — zero setup needed to develop.
  */
 function resolveBlobToken(): { token: string; source: string } | undefined {
@@ -36,8 +36,44 @@ function resolveBlobToken(): { token: string; source: string } | undefined {
   return undefined;
 }
 
+/** Same idea as `resolveBlobToken()`, but for the OIDC-mode store id (only used as a
+ * fallback when no read-write token is found anywhere — see `resolveBlobAuthOptions()`). */
+function resolveBlobStoreId(): { storeId: string; source: string } | undefined {
+  if (process.env.BLOB_STORE_ID) {
+    return { storeId: process.env.BLOB_STORE_ID, source: "BLOB_STORE_ID" };
+  }
+  const fallbackKey = Object.keys(process.env).find((key) => /_STORE_ID$/.test(key));
+  if (fallbackKey) {
+    return { storeId: process.env[fallbackKey] as string, source: fallbackKey };
+  }
+  return undefined;
+}
+
 function isBlobConfigured() {
-  return Boolean(resolveBlobToken() || process.env.BLOB_STORE_ID);
+  return Boolean(resolveBlobToken() || resolveBlobStoreId());
+}
+
+/**
+ * Builds the auth option(s) to pass explicitly to `put()`/`del()`, plus a short label for
+ * logging. We resolve these ourselves instead of relying on the SDK's own env lookup,
+ * which only recognizes the exact `BLOB_READ_WRITE_TOKEN` / `BLOB_STORE_ID` names — not
+ * the custom-prefixed names Vercel provisions once a project has more than one store
+ * connected (see file doc comment above).
+ * Confirmed directly from `@vercel/blob`'s installed source (`resolveBlobAuth()`): a
+ * passed-in `token` always wins immediately, without even looking at `storeId` or OIDC —
+ * and the store id is parsed straight out of the token string itself. So `storeId` here
+ * is only relevant as a fallback for pure-OIDC setups (no read-write token at all).
+ */
+function resolveBlobAuthOptions(): { options: { token?: string; storeId?: string }; label: string } {
+  const resolvedToken = resolveBlobToken();
+  if (resolvedToken) {
+    return { options: { token: resolvedToken.token }, label: `token:${resolvedToken.source}` };
+  }
+  const resolvedStoreId = resolveBlobStoreId();
+  if (resolvedStoreId) {
+    return { options: { storeId: resolvedStoreId.storeId }, label: `oidc:${resolvedStoreId.source}` };
+  }
+  return { options: {}, label: "oidc-implicit" };
 }
 
 /** Vercel sets this automatically on every deployment (Production, Preview, and dev via `vercel dev`). */
@@ -63,15 +99,14 @@ export async function saveMealImage(options: {
   const filename = `${Date.now()}-${randomUUID()}.${extension}`;
 
   if (isBlobConfigured()) {
-    const resolvedToken = resolveBlobToken();
-    const authMode = resolvedToken ? `token:${resolvedToken.source}` : "oidc";
+    const { options: authOptions, label: authMode } = resolveBlobAuthOptions();
     console.log(`${tag} uploading to Vercel Blob (auth=${authMode}, bytes=${buffer.length})`);
     const startedAt = Date.now();
     try {
       const blob = await put(`meal-photos/${userId}/${filename}`, buffer, {
         access: "public",
         contentType,
-        ...(resolvedToken ? { token: resolvedToken.token } : {}),
+        ...authOptions,
       });
       console.log(`${tag} Vercel Blob upload OK in ${Date.now() - startedAt}ms -> ${blob.url}`);
       return { url: blob.url, remove: () => deleteMealImage(blob.url) };
@@ -97,10 +132,10 @@ export async function saveMealImage(options: {
     // The local-disk fallback below would fail anyway (Vercel's deployment filesystem is
     // read-only outside /tmp, so `public/uploads` can't be created) — but with a confusing
     // raw ENOENT error. Fail fast with a message that points straight at the real fix.
-    console.error(`${tag} running on Vercel but no Blob credentials found (no *_READ_WRITE_TOKEN or BLOB_STORE_ID)`);
+    console.error(`${tag} running on Vercel but no Blob credentials found (no *_READ_WRITE_TOKEN or *_STORE_ID)`);
     throw new Error(
-      "Vercel Blob chưa được cấu hình: không tìm thấy BLOB_STORE_ID hay bất kỳ biến nào kết thúc bằng " +
-        "_READ_WRITE_TOKEN. Vào Vercel Dashboard → Storage → tạo hoặc kết nối Blob store cho project này " +
+      "Vercel Blob chưa được cấu hình: không tìm thấy biến nào kết thúc bằng _READ_WRITE_TOKEN hay _STORE_ID. " +
+        "Vào Vercel Dashboard → Storage → tạo hoặc kết nối Blob store cho project này " +
         "(đảm bảo áp dụng cho môi trường Production), rồi redeploy lại.",
     );
   }
@@ -123,8 +158,8 @@ export async function saveMealImage(options: {
 export async function deleteMealImage(imageUrl: string | null | undefined): Promise<void> {
   if (!imageUrl) return;
   if (/^https?:\/\//.test(imageUrl)) {
-    const resolvedToken = resolveBlobToken();
-    await del(imageUrl, resolvedToken ? { token: resolvedToken.token } : undefined).catch(() => {});
+    const { options: authOptions } = resolveBlobAuthOptions();
+    await del(imageUrl, authOptions).catch(() => {});
     return;
   }
   const absolutePath = path.join(process.cwd(), "public", imageUrl.replace(/^\/+/, ""));
